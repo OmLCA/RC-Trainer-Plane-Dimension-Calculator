@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AERO DESIGN STUDIO – RC Trainer Aircraft Designer</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✈️</text></svg>">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            blueprint: {
+              dark: '#071322',
+              navy: '#0b192c',
+              line: '#38bdf8',
+              accent: '#0284c7'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- React 18, ReactDOM, Babel Standalone -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Three.js for 3D Viewer -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- jsPDF for PDF Blueprint Export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    code, pre, .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #091322;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 overflow-hidden">
+  <div id="root"></div>
+
+  <!-- Main Standalone Application Script -->
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- UNIT SYSTEM CONSTANTS & UTILITIES ---
+    const MM_PER_INCH = 25.4;
+    const MM_PER_CM = 10.0;
+
+    function mmToUnit(mm, unit) {
+      return unit === 'cm' ? mm / MM_PER_CM : mm / MM_PER_INCH;
+    }
+
+    function unitToMm(value, unit) {
+      return unit === 'cm' ? value * MM_PER_CM : value * MM_PER_INCH;
+    }
+
+    function formatDimension(mm, unit, precision = 1, showUnit = true) {
+      const val = mmToUnit(mm, unit);
+      const rounded = val.toFixed(precision);
+      return showUnit ? `${rounded} ${unit}` : rounded;
+    }
+
+    function formatArea(mm2, unit, precision = 1) {
+      if (unit === 'cm') {
+        const cm2 = mm2 / 100;
+        const dm2 = mm2 / 10000;
+        return `${cm2.toFixed(precision)} cm² (${dm2.toFixed(2)} dm²)`;
+      } else {
+        const sqIn = mm2 / (MM_PER_INCH * MM_PER_INCH);
+        const sqFt = sqIn / 144;
+        return `${sqIn.toFixed(precision)} sq in (${sqFt.toFixed(2)} sq ft)`;
+      }
+    }
+
+    // --- AIRFOIL COORDINATE DATA ---
+    const CLARK_Y_RAW = [
+      { x: 0.0000, yU: 0.0350, yL: 0.0350 },
+      { x: 0.0125, yU: 0.0545, yL: 0.0193 },
+      { x: 0.0250, yU: 0.0650, yL: 0.0147 },
+      { x: 0.0500, yU: 0.0790, yL: 0.0093 },
+      { x: 0.0750, yU: 0.0885, yL: 0.0063 },
+      { x: 0.1000, yU: 0.0960, yL: 0.0042 },
+      { x: 0.1500, yU: 0.1068, yL: 0.0015 },
+      { x: 0.2000, yU: 0.1136, yL: 0.0003 },
+      { x: 0.2500, yU: 0.1169, yL: 0.0000 },
+      { x: 0.3000, yU: 0.1170, yL: 0.0000 },
+      { x: 0.4000, yU: 0.1140, yL: 0.0000 },
+      { x: 0.5000, yU: 0.1052, yL: 0.0000 },
+      { x: 0.6000, yU: 0.0915, yL: 0.0000 },
+      { x: 0.7000, yU: 0.0735, yL: 0.0000 },
+      { x: 0.8000, yU: 0.0522, yL: 0.0000 },
+      { x: 0.9000, yU: 0.0280, yL: 0.0000 },
+      { x: 0.9500, yU: 0.0149, yL: 0.0000 },
+      { x: 1.0000, yU: 0.0015, yL: 0.0000 }
+    ];
+
+    function generateNaca4Digit(m, p, t, points = 35) {
+      const coords = [];
+      for (let i = 0; i <= points; i++) {
+        const beta = (i / points) * Math.PI;
+        const x = 0.5 * (1 - Math.cos(beta));
+        const yt = 5 * t * (0.2969 * Math.sqrt(Math.max(0, x)) - 0.1260 * x - 0.3516 * Math.pow(x, 2) + 0.2843 * Math.pow(x, 3) - 0.1015 * Math.pow(x, 4));
+        let yc = 0, dyc_dx = 0;
+        if (m > 0 && p > 0) {
+          if (x < p) {
+            yc = (m / Math.pow(p, 2)) * (2 * p * x - Math.pow(x, 2));
+            dyc_dx = ((2 * m) / Math.pow(p, 2)) * (p - x);
+          } else {
+            yc = (m / Math.pow(1 - p, 2)) * (1 - 2 * p + 2 * p * x - Math.pow(x, 2));
+            dyc_dx = ((2 * m) / Math.pow(1 - p, 2)) * (p - x);
+          }
+        }
+        const theta = Math.atan(dyc_dx);
+        coords.push({
+          x: Number(x.toFixed(4)),
+          yUpper: Number((yc + yt * Math.cos(theta)).toFixed(4)),
+          yLower: Number((yc - yt * Math.cos(theta)).toFixed(4)),
+          camber: Number(yc.toFixed(4))
+        });
+      }
+      return coords;
+    }
+
+    function getAirfoilCoords(type, customThick = 12, customCamber = 2) {
+      if (type === 'clark-y') {
+        return CLARK_Y_RAW.map(pt => ({
+          x: pt.x,
+          yUpper: pt.yU,
+          yLower: pt.yL,
+          camber: (pt.yU + pt.yL) / 2
+        }));
+      }
+      if (type === 'naca-2412') return generateNaca4Digit(0.02, 0.40, 0.12);
+      if (type === 'naca-4412') return generateNaca4Digit(0.04, 0.40, 0.12);
+      return generateNaca4Digit(customCamber / 100, 0.40, customThick / 100);
+    }
+
+    // --- DEFAULT AIRCRAFT CONFIGURATION ---
+    const DEFAULT_CONFIG = {
+      wingspanMm: 1200, // 120 cm / ~47.2 in
+      unit: 'cm',
+      aircraftCategory: 'RC Trainer',
+      wingConfiguration: 'High wing',
+      tailConfiguration: 'Conventional tail',
+      airfoil: 'clark-y',
+      customAirfoilThicknessPct: 12,
+      customAirfoilCamberPct: 2,
+      wingPlanform: 'rectangular',
+      dihedralDeg: 3.5,
+      landingGearType: 'tricycle',
+      wingAspectRatio: 6.0,
+      wingTaperRatio: 1.0,
+      fuselageLengthRatio: 0.75,
+      tailMomentRatio: 0.60,
+      horizontalTailVolumeCoeff: 0.60,
+      horizontalTailAspectRatio: 4.0,
+      horizontalTailTaperRatio: 0.80,
+      verticalTailVolumeCoeff: 0.040,
+      verticalTailAspectRatio: 1.5,
+      verticalTailTaperRatio: 0.60,
+      aileronSpanRatio: 0.45,
+      aileronChordRatio: 0.22,
+      aileronOutboardOffsetRatio: 0.05,
+      elevatorChordRatio: 0.35,
+      rudderChordRatio: 0.40,
+      designModes: {
+        wing: 'auto',
+        fuselage: 'auto',
+        horizontalStabilizer: 'auto',
+        verticalStabilizer: 'auto',
+        controlSurfaces: 'auto'
+      },
+      manualOverrides: {}
+    };
+
+    // --- CALCULATION ENGINE ---
+    function calculateAircraft(config) {
+      const warnings = [];
+      const assumptions = [];
+      const b = Math.max(300, config.wingspanMm);
+      const halfSpan = b / 2;
+
+      // Wing
+      const ar = config.wingAspectRatio;
+      if (ar < 5.0) warnings.push(`Wing aspect ratio (${ar.toFixed(1)}) is unusually low; induced drag will be high.`);
+      if (ar > 8.0) warnings.push(`Wing aspect ratio (${ar.toFixed(1)}) is high for an RC trainer; tip stall risk.`);
+
+      const wingAreaMm2 = Math.round((b * b) / ar);
+      const meanChordMm = Math.round(b / ar);
+      let chordRootMm = meanChordMm;
+      let chordTipMm = meanChordMm;
+      const isTapered = config.wingPlanform === 'tapered';
+      const taper = isTapered ? Math.max(0.5, Math.min(1.0, config.wingTaperRatio || 0.75)) : 1.0;
+
+      if (isTapered) {
+        chordRootMm = Math.round((2 * wingAreaMm2) / (b * (1 + taper)));
+        chordTipMm = Math.round(chordRootMm * taper);
+      }
+
+      const macMm = isTapered
+        ? Math.round((2 / 3) * chordRootMm * ((1 + taper + taper * taper) / (1 + taper)))
+        : chordRootMm;
+
+      const macYMm = isTapered ? Math.round((b / 6) * ((1 + 2 * taper) / (1 + taper))) : Math.round(b / 4);
+      const sweepLeDeg = isTapered ? Math.atan2((chordRootMm - chordTipMm) * 0.75, halfSpan) * (180 / Math.PI) : 0;
+      const macXMm = Math.round(macYMm * Math.tan((sweepLeDeg * Math.PI) / 180));
+
+      const dihedralRad = (config.dihedralDeg * Math.PI) / 180;
+      const dihedralTipRiseMm = Math.round(halfSpan * Math.tan(dihedralRad));
+
+      const maxThicknessPct = config.airfoil === 'clark-y' ? 11.7 : (config.airfoil === 'custom' ? config.customAirfoilThicknessPct : 12.0);
+      const maxCamberPct = config.airfoil === 'clark-y' ? 3.4 : (config.airfoil === 'custom' ? config.customAirfoilCamberPct : (config.airfoil === 'naca-4412' ? 4.0 : 2.0));
+      const maxThicknessMm = Math.round(chordRootMm * (maxThicknessPct / 100));
+      const maxCamberMm = Math.round(chordRootMm * (maxCamberPct / 100));
+      const airfoilCoordinates = getAirfoilCoords(config.airfoil, maxThicknessPct, maxCamberPct);
+
+      const cgMinMm = Math.round(macXMm + 0.25 * macMm);
+      const cgMaxMm = Math.round(macXMm + 0.30 * macMm);
+
+      const wing = {
+        wingspanMm: b,
+        wingAreaMm2,
+        aspectRatio: ar,
+        chordRootMm,
+        chordTipMm,
+        meanAerodynamicChordMm: macMm,
+        macXPositionMm: macXMm,
+        macYPositionMm: macYMm,
+        halfSpanMm: halfSpan,
+        dihedralDeg: config.dihedralDeg,
+        dihedralTipRiseMm,
+        airfoil: config.airfoil,
+        maxThicknessMm,
+        maxThicknessPct,
+        maxCamberMm,
+        maxCamberPct,
+        airfoilCoordinates,
+        sparPositionRatio: 0.30,
+        centerOfGravityMinMm: cgMinMm,
+        centerOfGravityMaxMm: cgMaxMm
+      };
+
+      // Fuselage
+      const totalLengthMm = Math.round(b * config.fuselageLengthRatio);
+      const noseMomentArmMm = Math.round(totalLengthMm * 0.24);
+      const wingMountXStartMm = noseMomentArmMm;
+      const wingMountXEndMm = wingMountXStartMm + chordRootMm;
+      const tailMomentArmMm = Math.round(totalLengthMm * config.tailMomentRatio);
+
+      const maxCabinWidthMm = Math.round(b * 0.085);
+      const maxCabinHeightMm = Math.round(totalLengthMm * 0.14);
+      const noseWidthMm = Math.round(maxCabinWidthMm * 0.70);
+      const tailWidthMm = Math.round(maxCabinWidthMm * 0.25);
+      const noseHeightMm = Math.round(maxCabinHeightMm * 0.65);
+      const tailBoomHeightMm = Math.round(maxCabinHeightMm * 0.28);
+
+      const horizontalStabMountXMm = Math.round(totalLengthMm - 0.12 * totalLengthMm);
+      const verticalStabMountXMm = Math.round(totalLengthMm - 0.14 * totalLengthMm);
+      const mainGearMountXMm = config.landingGearType === 'taildragger'
+        ? Math.round(wingMountXStartMm + 0.10 * chordRootMm)
+        : Math.round(wingMountXStartMm + 0.45 * chordRootMm);
+      const mainGearHeightMm = Math.round(maxCabinHeightMm * 0.95);
+      const mainGearTrackWidthMm = Math.round(b * 0.22);
+      const wheelDiameterMm = Math.round(b * 0.055);
+
+      const fuselage = {
+        totalLengthMm,
+        maxCabinWidthMm,
+        noseWidthMm,
+        tailWidthMm,
+        maxCabinHeightMm,
+        noseHeightMm,
+        tailBoomHeightMm,
+        noseMomentArmMm,
+        tailMomentArmMm,
+        wingMountXStartMm,
+        wingMountXEndMm,
+        wingMountHeightMm: maxCabinHeightMm,
+        wingIncidenceDeg: 1.5,
+        thrustDownAngleDeg: 2.0,
+        thrustRightAngleDeg: 1.5,
+        horizontalStabMountXMm,
+        verticalStabMountXMm,
+        mainGearMountXMm,
+        mainGearHeightMm,
+        mainGearTrackWidthMm,
+        wheelDiameterMm
+      };
+
+      // Horizontal Stabilizer
+      const vhTarget = config.horizontalTailVolumeCoeff;
+      const effectiveTailArm = Math.max(100, tailMomentArmMm);
+      const calcHStabAreaMm2 = Math.round((vhTarget * wingAreaMm2 * macMm) / effectiveTailArm);
+      const arH = config.horizontalTailAspectRatio;
+      const hStabSpanMm = Math.round(Math.sqrt(calcHStabAreaMm2 * arH));
+      const hStabMeanChordMm = Math.round(calcHStabAreaMm2 / hStabSpanMm);
+      const hTaper = config.horizontalTailTaperRatio || 0.80;
+      const hChordRootMm = Math.round((2 * calcHStabAreaMm2) / (hStabSpanMm * (1 + hTaper)));
+      const hChordTipMm = Math.round(hChordRootMm * hTaper);
+      const actualHStabAreaMm2 = Math.round(((hChordRootMm + hChordTipMm) / 2) * hStabSpanMm);
+      const actualVh = (actualHStabAreaMm2 * effectiveTailArm) / (wingAreaMm2 * macMm);
+
+      const elevChordMm = Math.round(hChordRootMm * config.elevatorChordRatio);
+      const centerCutoutWidthMm = Math.round(tailWidthMm * 1.5);
+      const elevAreaMm2 = Math.round(hStabSpanMm * elevChordMm - centerCutoutWidthMm * elevChordMm);
+      const elevAreaPct = Math.round((elevAreaMm2 / actualHStabAreaMm2) * 100);
+
+      const horizontalStabilizer = {
+        spanMm: hStabSpanMm,
+        halfSpanMm: hStabSpanMm / 2,
+        chordRootMm: hChordRootMm,
+        chordTipMm: hChordTipMm,
+        meanChordMm: hStabMeanChordMm,
+        areaMm2: actualHStabAreaMm2,
+        aspectRatio: arH,
+        elevatorSpanMm: hStabSpanMm,
+        elevatorChordMm: elevChordMm,
+        elevatorAreaMm2: elevAreaMm2,
+        elevatorAreaPct: elevAreaPct,
+        centerCutoutWidthMm,
+        volumeCoefficientActual: Number(actualVh.toFixed(2))
+      };
+
+      // Vertical Stabilizer
+      const vvTarget = config.verticalTailVolumeCoeff;
+      const calcVStabAreaMm2 = Math.round((vvTarget * wingAreaMm2 * b) / effectiveTailArm);
+      const arV = config.verticalTailAspectRatio;
+      const vStabHeightMm = Math.round(Math.sqrt(calcVStabAreaMm2 * arV));
+      const vStabMeanChordMm = Math.round(calcVStabAreaMm2 / vStabHeightMm);
+      const vTaper = config.verticalTailTaperRatio || 0.60;
+      const vChordRootMm = Math.round((2 * calcVStabAreaMm2) / (vStabHeightMm * (1 + vTaper)));
+      const vChordTipMm = Math.round(vChordRootMm * vTaper);
+      const actualVStabAreaMm2 = Math.round(((vChordRootMm + vChordTipMm) / 2) * vStabHeightMm);
+      const actualVv = (actualVStabAreaMm2 * effectiveTailArm) / (wingAreaMm2 * b);
+
+      const rudChordRootMm = Math.round(vChordRootMm * config.rudderChordRatio);
+      const rudChordTipMm = Math.round(vChordTipMm * config.rudderChordRatio);
+      const rudAreaMm2 = Math.round(((rudChordRootMm + rudChordTipMm) / 2) * vStabHeightMm);
+      const rudAreaPct = Math.round((rudAreaMm2 / actualVStabAreaMm2) * 100);
+
+      const verticalStabilizer = {
+        heightMm: vStabHeightMm,
+        chordRootMm: vChordRootMm,
+        chordTipMm: vChordTipMm,
+        meanChordMm: vStabMeanChordMm,
+        areaMm2: actualVStabAreaMm2,
+        aspectRatio: arV,
+        rudderHeightMm: vStabHeightMm,
+        rudderChordRootMm: rudChordRootMm,
+        rudderChordTipMm: rudChordTipMm,
+        rudderAreaMm2: rudAreaMm2,
+        rudderAreaPct: rudAreaPct,
+        volumeCoefficientActual: Number(actualVv.toFixed(3))
+      };
+
+      // Control Surfaces
+      const aileronSpanMm = Math.round(halfSpan * config.aileronSpanRatio);
+      const aileronChordMm = Math.round(chordRootMm * config.aileronChordRatio);
+      const aileronStartFromTipMm = Math.round(halfSpan * config.aileronOutboardOffsetRatio);
+      const aileronTotalAreaMm2 = Math.round(aileronSpanMm * aileronChordMm * 2);
+      const aileronAreaPctOfWing = Number(((aileronTotalAreaMm2 / wingAreaMm2) * 100).toFixed(1));
+
+      const controlSurfaces = {
+        aileron: {
+          leftSpanMm: aileronSpanMm,
+          rightSpanMm: aileronSpanMm,
+          chordMm: aileronChordMm,
+          startFromTipMm: aileronStartFromTipMm,
+          areaMm2Total: aileronTotalAreaMm2,
+          areaPctOfWing: aileronAreaPctOfWing,
+          recommendedDeflectionHighDeg: 20,
+          recommendedDeflectionLowDeg: 12
+        },
+        elevator: {
+          spanMm: hStabSpanMm,
+          chordMm: elevChordMm,
+          areaMm2: elevAreaMm2,
+          areaPctOfHStab: elevAreaPct,
+          recommendedDeflectionHighDeg: 25,
+          recommendedDeflectionLowDeg: 15
+        },
+        rudder: {
+          heightMm: vStabHeightMm,
+          chordRootMm: rudChordRootMm,
+          chordTipMm: rudChordTipMm,
+          areaMm2: rudAreaMm2,
+          areaPctOfVStab: rudAreaPct,
+          recommendedDeflectionHighDeg: 30,
+          recommendedDeflectionLowDeg: 18
+        }
+      };
+
+      // Performance
+      const wingAreaDm2 = wingAreaMm2 / 10000;
+      const targetWingLoading = 36.0;
+      const estimatedWeightGrams = Math.round(wingAreaDm2 * targetWingLoading);
+      const wingLoadingOzPerSqFt = Number((targetWingLoading * 0.3277).toFixed(1));
+      const massKg = estimatedWeightGrams / 1000;
+      const areaM2 = wingAreaMm2 / 1000000;
+      const stallSpeedMs = Math.sqrt((2 * massKg * 9.81) / (1.225 * areaM2 * 1.25));
+      const stallSpeedKmh = Math.round(stallSpeedMs * 3.6);
+      const stallSpeedMph = Math.round(stallSpeedMs * 2.237);
+      const recommendedMotorWatts = Math.round(massKg * 175);
+      const recommendedPropeller = b < 900 ? '7x5 to 8x4' : (b < 1300 ? '9x5 to 10x4.7' : '11x5.5 to 12x6');
+
+      const performance = {
+        estimatedWeightGrams,
+        wingLoadingGramsPerDm2: targetWingLoading,
+        wingLoadingOzPerSqFt,
+        stallSpeedKmh,
+        stallSpeedMph,
+        recommendedMotorWatts,
+        recommendedPropeller
+      };
+
+      return {
+        config,
+        wing,
+        fuselage,
+        horizontalStabilizer,
+        verticalStabilizer,
+        controlSurfaces,
+        performance,
+        warnings,
+        assumptions
+      };
+    }
+
+    // --- REUSABLE SVG DIMENSION LINE COMPONENT ---
+    function DimensionLine({ x1, y1, x2, y2, offset = 25, orientation = 'horizontal', measuredValueMm, unit, labelPrefix = '', color = 'currentColor' }) {
+      let dimX1 = x1, dimY1 = y1, dimX2 = x2, dimY2 = y2;
+      let ext1_x1 = x1, ext1_y1 = y1, ext1_x2 = x1, ext1_y2 = y1;
+      let ext2_x1 = x2, ext2_y1 = y2, ext2_x2 = x2, ext2_y2 = y2;
+      let textX = 0, textY = 0, textAngle = 0;
+      const arrowSize = 6;
+      const valMm = measuredValueMm !== undefined ? measuredValueMm : (orientation === 'horizontal' ? Math.abs(x2 - x1) : Math.abs(y2 - y1));
+      const labelText = `${labelPrefix}${formatDimension(valMm, unit, 1)}`;
+
+      if (orientation === 'horizontal') {
+        const yDim = (y1 + y2) / 2 + offset;
+        dimX1 = x1; dimY1 = yDim; dimX2 = x2; dimY2 = yDim;
+        const dir = offset >= 0 ? 1 : -1;
+        ext1_y1 = y1 + dir * 4; ext1_y2 = yDim + dir * 5;
+        ext2_y1 = y2 + dir * 4; ext2_y2 = yDim + dir * 5;
+        textX = (dimX1 + dimX2) / 2;
+        textY = yDim - (offset >= 0 ? 5 : 6);
+      } else {
+        const xDim = (x1 + x2) / 2 + offset;
+        dimX1 = xDim; dimY1 = y1; dimX2 = xDim; dimY2 = y2;
+        const dir = offset >= 0 ? 1 : -1;
+        ext1_x1 = x1 + dir * 4; ext1_x2 = xDim + dir * 5;
+        ext2_x1 = x2 + dir * 4; ext2_x2 = xDim + dir * 5;
+        textX = xDim + (offset >= 0 ? 12 : -12);
+        textY = (dimY1 + dimY2) / 2;
+        textAngle = -90;
+      }
+
+      const drawArrow = (fromX, fromY, toX, toY) => {
+        const angle = Math.atan2(toY - fromY, toX - fromX);
+        const p1X = toX - arrowSize * Math.cos(angle - Math.PI / 6);
+        const p1Y = toY - arrowSize * Math.sin(angle - Math.PI / 6);
+        const p2X = toX - arrowSize * Math.cos(angle + Math.PI / 6);
+        const p2Y = toY - arrowSize * Math.sin(angle + Math.PI / 6);
+        return `M ${toX} ${toY} L ${p1X} ${p1Y} L ${p2X} ${p2Y} Z`;
+      };
+
+      return (
+        <g style={{ color }}>
+          <line x1={ext1_x1} y1={ext1_y1} x2={ext1_x2} y2={ext1_y2} stroke={color} strokeWidth="1" strokeOpacity="0.6" />
+          <line x1={ext2_x1} y1={ext2_y1} x2={ext2_x2} y2={ext2_y2} stroke={color} strokeWidth="1" strokeOpacity="0.6" />
+          <line x1={dimX1} y1={dimY1} x2={dimX2} y2={dimY2} stroke={color} strokeWidth="1.2" />
+          <path d={drawArrow(dimX2, dimY2, dimX1, dimY1)} fill={color} />
+          <path d={drawArrow(dimX1, dimY1, dimX2, dimY2)} fill={color} />
+          <g transform={`translate(${textX}, ${textY}) rotate(${textAngle})`}>
+            <text x="0" y="0" textAnchor="middle" dominantBaseline="central" stroke="#071322" strokeWidth="3" fontSize="9.5" fontFamily="monospace" fontWeight="bold">
+              {labelText}
+            </text>
+            <text x="0" y="0" textAnchor="middle" dominantBaseline="central" fill={color} fontSize="9.5" fontFamily="monospace" fontWeight="bold">
+              {labelText}
+            </text>
+          </g>
+        </g>
+      );
+    }
+
+    // --- REUSABLE SVG VIEWER WRAPPER (ZOOM & PAN) ---
+    function TechnicalViewer({ title, subtitle, width = 1000, height = 600, children, downloadFileName = 'technical-drawing' }) {
+      const [zoom, setZoom] = useState(1);
+      const [pan, setPan] = useState({ x: 0, y: 0 });
+      const [isDragging, setIsDragging] = useState(false);
+      const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+      const svgRef = useRef(null);
+
+      const handleDownloadSvg = () => {
+        if (!svgRef.current) return;
+        const serializer = new XMLSerializer();
+        const source = serializer.serializeToString(svgRef.current);
+        const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${downloadFileName}.svg`;
+        link.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return (
+        <div className="rounded-xl border border-sky-950 bg-[#071322] overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-slate-950/80 border-b border-sky-950">
+            <div>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-sky-400">{title}</h3>
+              {subtitle && <p className="text-[11px] text-slate-400">{subtitle}</p>}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs">
+              <button onClick={() => setZoom(z => Math.min(4, z * 1.15))} className="p-1 px-2 rounded bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200">+</button>
+              <span className="font-mono text-[10px] text-slate-400 min-w-[35px] text-center">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.max(0.4, z * 0.85))} className="p-1 px-2 rounded bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200">-</button>
+              <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="p-1 px-2 rounded bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-400">Reset</button>
+              <button onClick={handleDownloadSvg} className="ml-2 px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs flex items-center gap-1">
+                Download SVG
+              </button>
+            </div>
+          </div>
+          <div
+            className="w-full h-[520px] overflow-hidden cursor-grab active:cursor-grabbing relative"
+            onMouseDown={(e) => { if (e.button === 0) { setIsDragging(true); setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y }); } }}
+            onMouseMove={(e) => { if (isDragging) setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); }}
+            onMouseUp={() => setIsDragging(false)}
+            onMouseLeave={() => setIsDragging(false)}
+            onWheel={(e) => { e.preventDefault(); setZoom(z => Math.max(0.4, Math.min(4, z * (e.deltaY < 0 ? 1.1 : 0.9)))); }}
+          >
+            <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+              <defs>
+                <pattern id="grid-pattern" width="20" height="20" patternUnits="userSpaceOnUse">
+                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#0284c7" strokeWidth="0.5" strokeOpacity="0.15" />
+                </pattern>
+                <linearGradient id="controlSurfaceHatch" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#fbbf24" stopOpacity="0.25" />
+                  <stop offset="100%" stopColor="#fbbf24" stopOpacity="0.08" />
+                </linearGradient>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#grid-pattern)" />
+              <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+                {children}
+              </g>
+            </svg>
+          </div>
+        </div>
+      );
+    }
+
+    // --- THREE.JS 3D AIRCRAFT COMPONENT ---
+    function ThreeDViewer({ aircraft }) {
+      const mountRef = useRef(null);
+
+      useEffect(() => {
+        if (!mountRef.current || !window.THREE) return;
+        const container = mountRef.current;
+        const width = container.clientWidth || 500;
+        const height = container.clientHeight || 340;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x071322);
+
+        const grid = new THREE.GridHelper(1800, 36, 0x0284c7, 0x1e293b);
+        grid.position.y = -140;
+        scene.add(grid);
+
+        const camera = new THREE.PerspectiveCamera(45, width / height, 10, 4000);
+        camera.position.set(1100, 500, 1200);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(width, height);
+        container.innerHTML = '';
+        container.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const light = new THREE.DirectionalLight(0x38bdf8, 1.2);
+        light.position.set(400, 800, 600);
+        scene.add(light);
+
+        const group = new THREE.Group();
+        scene.add(group);
+
+        const wingMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.3 });
+        const fuseMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 });
+        const controlMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.3 });
+        const gearMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
+
+        const b = aircraft.wing.wingspanMm;
+        const c = aircraft.wing.chordRootMm;
+        const fuseL = aircraft.fuselage.totalLengthMm;
+        const offX = -fuseL * 0.45;
+
+        // Wing Panels (Right & Left)
+        const dRad = (aircraft.wing.dihedralDeg * Math.PI) / 180;
+        const rWingGeo = new THREE.BoxGeometry(c, 15, b / 2);
+        rWingGeo.translate(c / 2, 0, b / 4);
+        const rWing = new THREE.Mesh(rWingGeo, wingMat);
+        rWing.position.set(offX + aircraft.fuselage.wingMountXStartMm, 65, 0);
+        rWing.rotation.x = -dRad;
+        group.add(rWing);
+
+        const lWingGeo = new THREE.BoxGeometry(c, 15, b / 2);
+        lWingGeo.translate(c / 2, 0, -b / 4);
+        const lWing = new THREE.Mesh(lWingGeo, wingMat);
+        lWing.position.set(offX + aircraft.fuselage.wingMountXStartMm, 65, 0);
+        lWing.rotation.x = dRad;
+        group.add(lWing);
+
+        // Ailerons
+        const ailGeo = new THREE.BoxGeometry(c * 0.22, 10, b * 0.22);
+        const rAil = new THREE.Mesh(ailGeo, controlMat);
+        rAil.position.set(offX + aircraft.fuselage.wingMountXStartMm + c * 0.9, 65, b * 0.36);
+        rAil.rotation.x = -dRad;
+        group.add(rAil);
+
+        const lAil = new THREE.Mesh(ailGeo, controlMat);
+        lAil.position.set(offX + aircraft.fuselage.wingMountXStartMm + c * 0.9, 65, -b * 0.36);
+        lAil.rotation.x = dRad;
+        group.add(lAil);
+
+        // Fuselage Cabin & Boom
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(c * 1.3, 110, 85), fuseMat);
+        cabin.position.set(offX + aircraft.fuselage.wingMountXStartMm + c * 0.5, 0, 0);
+        group.add(cabin);
+
+        const boom = new THREE.Mesh(new THREE.BoxGeometry(fuseL * 0.6, 35, 25), fuseMat);
+        boom.position.set(offX + fuseL * 0.7, 0, 0);
+        group.add(boom);
+
+        // Propeller
+        const prop = new THREE.Mesh(new THREE.BoxGeometry(4, c * 0.8, 10), gearMat);
+        prop.position.set(offX, 0, 0);
+        group.add(prop);
+
+        // Stabilizers
+        const hStab = new THREE.Mesh(new THREE.BoxGeometry(aircraft.horizontalStabilizer.chordRootMm, 8, aircraft.horizontalStabilizer.spanMm), wingMat);
+        hStab.position.set(offX + fuseL - 30, 22, 0);
+        group.add(hStab);
+
+        const elev = new THREE.Mesh(new THREE.BoxGeometry(aircraft.horizontalStabilizer.elevatorChordMm, 7, aircraft.horizontalStabilizer.spanMm * 0.9), controlMat);
+        elev.position.set(offX + fuseL + 10, 22, 0);
+        group.add(elev);
+
+        const vFin = new THREE.Mesh(new THREE.BoxGeometry(aircraft.verticalStabilizer.chordRootMm, aircraft.verticalStabilizer.heightMm, 8), wingMat);
+        vFin.position.set(offX + fuseL - 20, aircraft.verticalStabilizer.heightMm / 2 + 10, 0);
+        group.add(vFin);
+
+        let isDown = false, prev = { x: 0, y: 0 };
+        let sphere = { r: 1600, theta: Math.PI / 4, phi: Math.PI / 3 };
+
+        const updateCam = () => {
+          camera.position.x = sphere.r * Math.sin(sphere.phi) * Math.sin(sphere.theta);
+          camera.position.y = sphere.r * Math.cos(sphere.phi);
+          camera.position.z = sphere.r * Math.sin(sphere.phi) * Math.cos(sphere.theta);
+          camera.lookAt(0, 0, 0);
+        };
+        updateCam();
+
+        const onDown = (e) => { isDown = true; prev = { x: e.clientX, y: e.clientY }; };
+        const onMove = (e) => {
+          if (!isDown) return;
+          sphere.theta -= (e.clientX - prev.x) * 0.007;
+          sphere.phi = Math.max(0.1, Math.min(Math.PI / 2 + 0.3, sphere.phi - (e.clientY - prev.y) * 0.007));
+          prev = { x: e.clientX, y: e.clientY };
+          updateCam();
+        };
+        const onUp = () => { isDown = false; };
+        const onWheel = (e) => { e.preventDefault(); sphere.r = Math.max(500, Math.min(3000, sphere.r + e.deltaY * 1.5)); updateCam(); };
+
+        container.addEventListener('mousedown', onDown);
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        container.addEventListener('wheel', onWheel, { passive: false });
+
+        let animId;
+        const animate = () => {
+          animId = requestAnimationFrame(animate);
+          prop.rotation.x += 0.25;
+          renderer.render(scene, camera);
+        };
+        animate();
+
+        return () => {
+          cancelAnimationFrame(animId);
+          container.removeEventListener('mousedown', onDown);
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+          container.removeEventListener('wheel', onWheel);
+          renderer.dispose();
+        };
+      }, [aircraft]);
+
+      return (
+        <div className="relative w-full h-[360px] rounded-xl overflow-hidden border border-sky-950 bg-[#071322]">
+          <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+          <div className="absolute top-3 left-3 bg-slate-950/80 border border-sky-900 text-sky-400 text-[10px] font-mono px-2 py-1 rounded">
+            INTERACTIVE 3D AIRFRAME MODEL (DRAG TO ROTATE, SCROLL TO ZOOM)
+          </div>
+        </div>
+      );
+    }
+
+    // --- MAIN APP COMPONENT ---
+    function App() {
+      const [config, setConfig] = useState(DEFAULT_CONFIG);
+      const [activeTab, setActiveTab] = useState(0);
+      const [refImages, setRefImages] = useState({});
+
+      const aircraft = useMemo(() => calculateAircraft(config), [config]);
+      const unit = config.unit;
+
+      const handleUnitChange = (newUnit) => {
+        setConfig(prev => ({ ...prev, unit: newUnit }));
+      };
+
+      const handleWingspanInput = (val) => {
+        const num = parseFloat(val);
+        if (!isNaN(num) && num > 0) {
+          setConfig(prev => ({ ...prev, wingspanMm: Math.round(unitToMm(num, unit)) }));
+        }
+      };
+
+      // Navigation Items
+      const navItems = [
+        '1. Dashboard',
+        '2. Aircraft Configuration',
+        '3. Wing Design',
+        '4. Horizontal Stabilizer',
+        '5. Vertical Stabilizer',
+        '6. Fuselage Design',
+        '7. Control Surfaces',
+        '8. Complete Blueprint',
+        '9. Export Design'
+      ];
+
+      return (
+        <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
+          {/* Top Navbar */}
+          <header className="h-14 bg-slate-900 border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">✈️</span>
+              <div>
+                <h1 className="font-black text-sm uppercase tracking-wider text-white font-mono">AERO DESIGN STUDIO</h1>
+                <p className="text-[10px] text-slate-400">RC Trainer Aircraft Preliminary Design Tool</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="px-3 py-1 bg-slate-800 rounded border border-slate-700 text-xs flex items-center gap-1.5">
+                <span className="text-slate-400">Span:</span>
+                <span className="font-mono text-sky-400 font-bold">{formatDimension(config.wingspanMm, unit)}</span>
+              </div>
+
+              {/* Global Unit Selector */}
+              <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-sky-900/60">
+                <span className="text-[10px] uppercase font-bold text-slate-400 px-2">Unit:</span>
+                <button
+                  onClick={() => handleUnitChange('cm')}
+                  className={`px-2.5 py-0.5 text-xs font-bold rounded ${unit === 'cm' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                >
+                  cm
+                </button>
+                <button
+                  onClick={() => handleUnitChange('in')}
+                  className={`px-2.5 py-0.5 text-xs font-bold rounded ${unit === 'in' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                >
+                  in
+                </button>
+              </div>
+
+              <button
+                onClick={() => setActiveTab(7)}
+                className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-xs font-bold transition"
+              >
+                Blueprint
+              </button>
+            </div>
+          </header>
+
+          {/* Main Layout: Navy Sidebar + Workspace */}
+          <div className="flex flex-1 overflow-hidden">
+            <aside className="w-60 bg-slate-950 border-r border-slate-800 p-3 space-y-1 shrink-0 overflow-y-auto">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-3 py-1 font-mono">
+                Design Modules
+              </div>
+              {navItems.map((name, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveTab(i)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition ${
+                    activeTab === i
+                      ? 'bg-sky-600 text-white font-bold shadow'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </aside>
+
+            {/* Workspace Area */}
+            <main className="flex-1 p-6 overflow-y-auto bg-[#06101e]">
+              {/* TAB 0: DASHBOARD */}
+              {activeTab === 0 && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Wingspan</span>
+                      <span className="text-lg font-bold font-mono text-white">{formatDimension(aircraft.wing.wingspanMm, unit)}</span>
+                    </div>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Wing Area</span>
+                      <span className="text-lg font-bold font-mono text-white">{formatArea(aircraft.wing.wingAreaMm2, unit, 0)}</span>
+                    </div>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Est. Weight</span>
+                      <span className="text-lg font-bold font-mono text-emerald-400">{aircraft.performance.estimatedWeightGrams} g</span>
+                    </div>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Wing Loading</span>
+                      <span className="text-lg font-bold font-mono text-amber-400">{aircraft.performance.wingLoadingGramsPerDm2} g/dm²</span>
+                    </div>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Stall Speed</span>
+                      <span className="text-lg font-bold font-mono text-sky-300">{aircraft.performance.stallSpeedKmh} km/h</span>
+                    </div>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase block">Tail Vol (Vh)</span>
+                      <span className="text-lg font-bold font-mono text-emerald-400">{aircraft.horizontalStabilizer.volumeCoefficientActual}</span>
+                    </div>
+                  </div>
+
+                  <ThreeDViewer aircraft={aircraft} />
+
+                  <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 text-xs space-y-2">
+                    <span className="font-bold text-sky-400 uppercase tracking-wider block">Aerodynamic Design Check</span>
+                    <p className="text-slate-300">
+                      Tail volume coefficients (Vh = {aircraft.horizontalStabilizer.volumeCoefficientActual}, Vv = {aircraft.verticalStabilizer.volumeCoefficientActual}) are well within the standard RC trainer stability envelope for easy self-recovering flight.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 1: AIRCRAFT CONFIGURATION */}
+              {activeTab === 1 && (
+                <div className="max-w-2xl mx-auto space-y-6">
+                  <div className="p-6 bg-slate-900 rounded-2xl border border-slate-800 space-y-6">
+                    <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+                      <div>
+                        <h2 className="text-lg font-bold text-white">Trainer Aircraft Configuration</h2>
+                        <p className="text-xs text-slate-400">Configure sizing parameters and design ratios</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab(7)}
+                        className="px-5 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-lg text-xs uppercase"
+                      >
+                        GENERATE AIRCRAFT
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* Wingspan Input */}
+                      <div className="p-4 bg-slate-950 rounded-xl border border-sky-900/60 space-y-2">
+                        <label className="text-xs font-bold text-white flex justify-between">
+                          <span>MANDATORY INPUT: WINGSPAN</span>
+                          <span className="text-sky-400 font-mono">({unit.toUpperCase()})</span>
+                        </label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            step="0.5"
+                            defaultValue={mmToUnit(config.wingspanMm, unit).toFixed(1)}
+                            onChange={(e) => handleWingspanInput(e.target.value)}
+                            className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-sky-400 font-mono text-base font-bold outline-none"
+                          />
+                          <span className="px-3 py-2 bg-slate-800 rounded font-mono text-xs font-bold">{unit}</span>
+                        </div>
+                      </div>
+
+                      {/* Wing Planform */}
+                      <div className="space-y-1">
+                        <label className="text-xs text-slate-300 font-semibold">Wing Planform</label>
+                        <select
+                          value={config.wingPlanform}
+                          onChange={(e) => setConfig(prev => ({ ...prev, wingPlanform: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-xs text-white"
+                        >
+                          <option value="rectangular">Rectangular (Constant Chord)</option>
+                          <option value="tapered">Tapered (Trapezoidal Planform)</option>
+                        </select>
+                      </div>
+
+                      {/* Airfoil */}
+                      <div className="space-y-1">
+                        <label className="text-xs text-slate-300 font-semibold">Airfoil</label>
+                        <select
+                          value={config.airfoil}
+                          onChange={(e) => setConfig(prev => ({ ...prev, airfoil: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-xs text-white"
+                        >
+                          <option value="clark-y">Clark Y (11.7% Flat Bottom – Classic Trainer)</option>
+                          <option value="naca-2412">NACA 2412 (12% Semi-Symmetrical)</option>
+                          <option value="naca-4412">NACA 4412 (12% Cambered STOL)</option>
+                        </select>
+                      </div>
+
+                      {/* Dihedral Slider */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-300">
+                          <span>Dihedral Angle: {config.dihedralDeg.toFixed(1)}°</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="8"
+                          step="0.5"
+                          value={config.dihedralDeg}
+                          onChange={(e) => setConfig(prev => ({ ...prev, dihedralDeg: parseFloat(e.target.value) }))}
+                          className="w-full accent-sky-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: WING DESIGN */}
+              {activeTab === 2 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="Main Wing – Technical Planform Drawing"
+                    subtitle={`Wingspan: ${formatDimension(aircraft.wing.wingspanMm, unit)} | Root Chord: ${formatDimension(aircraft.wing.chordRootMm, unit)}`}
+                    width={1000}
+                    height={550}
+                    downloadFileName="wing-top-view"
+                  >
+                    {(() => {
+                      const span = aircraft.wing.wingspanMm;
+                      const scale = 760 / span;
+                      const cx = 500, cy = 250;
+                      const sSpan = span * scale;
+                      const sHalf = sSpan / 2;
+                      const sCRoot = aircraft.wing.chordRootMm * scale;
+                      const sCTip = aircraft.wing.chordTipMm * scale;
+                      const isTaper = config.wingPlanform === 'tapered';
+
+                      const rootLeY = cy - sCRoot / 2;
+                      const rootTeY = cy + sCRoot / 2;
+                      const tipTeY = rootTeY;
+                      const tipLeY = tipTeY - sCTip;
+
+                      const outline = isTaper
+                        ? `M ${cx - sHalf} ${tipLeY} L ${cx} ${rootLeY} L ${cx + sHalf} ${tipLeY} L ${cx + sHalf} ${tipTeY} L ${cx} ${rootTeY} L ${cx - sHalf} ${tipTeY} Z`
+                        : `M ${cx - sHalf} ${rootLeY} L ${cx + sHalf} ${rootLeY} L ${cx + sHalf} ${rootTeY} L ${cx - sHalf} ${rootTeY} Z`;
+
+                      const ailSpan = aircraft.controlSurfaces.aileron.leftSpanMm * scale;
+                      const ailChord = aircraft.controlSurfaces.aileron.chordMm * scale;
+                      const ailOffset = aircraft.controlSurfaces.aileron.startFromTipMm * scale;
+
+                      return (
+                        <g>
+                          <line x1={cx} y1={rootLeY - 40} x2={cx} y2={rootTeY + 40} stroke="#ec4899" strokeWidth="1" strokeDasharray="14,4,4,4" />
+                          <path d={outline} fill="rgba(56, 189, 248, 0.05)" stroke="#38bdf8" strokeWidth="2.5" />
+                          <line x1={cx - sHalf} y1={rootLeY + sCRoot * 0.3} x2={cx + sHalf} y2={rootLeY + sCRoot * 0.3} stroke="#ec4899" strokeWidth="1.8" strokeDasharray="6,3" />
+
+                          {/* Ailerons */}
+                          <rect x={cx - sHalf + ailOffset} y={tipTeY - ailChord} width={ailSpan} height={ailChord} fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+                          <rect x={cx + sHalf - ailOffset - ailSpan} y={tipTeY - ailChord} width={ailSpan} height={ailChord} fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+
+                          <DimensionLine x1={cx - sHalf} y1={rootLeY} x2={cx + sHalf} y2={rootLeY} offset={-45} orientation="horizontal" measuredValueMm={span} unit={unit} labelPrefix="SPAN: " color="#38bdf8" />
+                          <DimensionLine x1={cx} y1={rootLeY} x2={cx} y2={rootTeY} offset={-35} orientation="vertical" measuredValueMm={aircraft.wing.chordRootMm} unit={unit} labelPrefix="ROOT: " color="#38bdf8" />
+                          <DimensionLine x1={cx + sHalf} y1={tipLeY} x2={cx + sHalf} y2={tipTeY} offset={35} orientation="vertical" measuredValueMm={aircraft.wing.chordTipMm} unit={unit} labelPrefix="TIP: " color="#38bdf8" />
+                        </g>
+                      );
+                    })()}
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 3: HORIZONTAL STABILIZER */}
+              {activeTab === 3 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="Horizontal Stabilizer & Elevator – Top View"
+                    subtitle={`Span: ${formatDimension(aircraft.horizontalStabilizer.spanMm, unit)} | Area: ${formatArea(aircraft.horizontalStabilizer.areaMm2, unit)}`}
+                    width={900}
+                    height={500}
+                    downloadFileName="horizontal-stabilizer"
+                  >
+                    {(() => {
+                      const span = aircraft.horizontalStabilizer.spanMm;
+                      const scale = 550 / span;
+                      const cx = 450, cy = 230;
+                      const sHalf = (span / 2) * scale;
+                      const sRoot = aircraft.horizontalStabilizer.chordRootMm * scale;
+                      const sElev = aircraft.horizontalStabilizer.elevatorChordMm * scale;
+
+                      return (
+                        <g>
+                          <line x1={cx} y1={cy - sRoot / 2 - 30} x2={cx} y2={cy + sRoot / 2 + 30} stroke="#ec4899" strokeWidth="1" strokeDasharray="14,4,4,4" />
+                          <polygon points={`${cx - sHalf},${cy - sRoot / 2 + 20} ${cx},${cy - sRoot / 2} ${cx + sHalf},${cy - sRoot / 2 + 20} ${cx + sHalf},${cy + sRoot / 2} ${cx - sHalf},${cy + sRoot / 2}`} fill="rgba(56, 189, 248, 0.08)" stroke="#38bdf8" strokeWidth="2.5" />
+                          <rect x={cx - sHalf} y={cy + sRoot / 2 - sElev} width={sHalf * 2} height={sElev} fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" strokeDasharray="4,2" />
+
+                          <DimensionLine x1={cx - sHalf} y1={cy - sRoot / 2} x2={cx + sHalf} y2={cy - sRoot / 2} offset={-35} orientation="horizontal" measuredValueMm={span} unit={unit} labelPrefix="H-SPAN: " color="#38bdf8" />
+                          <DimensionLine x1={cx} y1={cy - sRoot / 2} x2={cx} y2={cy + sRoot / 2} offset={-30} orientation="vertical" measuredValueMm={aircraft.horizontalStabilizer.chordRootMm} unit={unit} labelPrefix="ROOT: " color="#38bdf8" />
+                        </g>
+                      );
+                    })()}
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 4: VERTICAL STABILIZER */}
+              {activeTab === 4 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="Vertical Stabilizer & Rudder – Side View"
+                    subtitle={`Height: ${formatDimension(aircraft.verticalStabilizer.heightMm, unit)} | Area: ${formatArea(aircraft.verticalStabilizer.areaMm2, unit)}`}
+                    width={800}
+                    height={500}
+                    downloadFileName="vertical-stabilizer"
+                  >
+                    {(() => {
+                      const h = aircraft.verticalStabilizer.heightMm;
+                      const scale = 320 / h;
+                      const ox = 250, oy = 400;
+                      const sH = h * scale;
+                      const sRoot = aircraft.verticalStabilizer.chordRootMm * scale;
+                      const sTip = aircraft.verticalStabilizer.chordTipMm * scale;
+                      const sRud = aircraft.verticalStabilizer.rudderChordRootMm * scale;
+
+                      return (
+                        <g>
+                          <line x1={ox - 50} y1={oy} x2={ox + sRoot + 50} y2={oy} stroke="#38bdf8" strokeWidth="1" strokeDasharray="8,4" strokeOpacity="0.5" />
+                          <polygon points={`${ox},${oy} ${ox + sRoot * 0.3},${oy - sH} ${ox + sRoot * 0.3 + sTip},${oy - sH} ${ox + sRoot},${oy}`} fill="rgba(56, 189, 248, 0.08)" stroke="#38bdf8" strokeWidth="2.5" />
+                          <polygon points={`${ox + sRoot - sRud},${oy} ${ox + sRoot * 0.3 + sTip - sRud * 0.6},${oy - sH} ${ox + sRoot * 0.3 + sTip},${oy - sH} ${ox + sRoot},${oy}`} fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+
+                          <DimensionLine x1={ox} y1={oy} x2={ox} y2={oy - sH} offset={-40} orientation="vertical" measuredValueMm={h} unit={unit} labelPrefix="HEIGHT: " color="#38bdf8" />
+                          <DimensionLine x1={ox} y1={oy} x2={ox + sRoot} y2={oy} offset={35} orientation="horizontal" measuredValueMm={aircraft.verticalStabilizer.chordRootMm} unit={unit} labelPrefix="ROOT: " color="#38bdf8" />
+                        </g>
+                      );
+                    })()}
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 5: FUSELAGE DESIGN */}
+              {activeTab === 5 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="Fuselage – Side Elevation & Top Planform"
+                    subtitle={`Length: ${formatDimension(aircraft.fuselage.totalLengthMm, unit)} | Cabin Width: ${formatDimension(aircraft.fuselage.maxCabinWidthMm, unit)}`}
+                    width={1000}
+                    height={550}
+                    downloadFileName="fuselage-technical"
+                  >
+                    {(() => {
+                      const len = aircraft.fuselage.totalLengthMm;
+                      const scale = 750 / len;
+                      const ox = 120, oy = 350;
+                      const sL = len * scale;
+                      const sH = aircraft.fuselage.maxCabinHeightMm * scale;
+                      const wingStart = ox + aircraft.fuselage.wingMountXStartMm * scale;
+                      const wingEnd = ox + aircraft.fuselage.wingMountXEndMm * scale;
+
+                      const pts = [
+                        `${ox},${oy - sH * 0.5}`,
+                        `${ox + sL * 0.15},${oy - sH * 0.8}`,
+                        `${wingStart},${oy - sH}`,
+                        `${wingEnd},${oy - sH * 0.95}`,
+                        `${ox + sL},${oy - sH * 0.25}`,
+                        `${ox + sL},${oy}`,
+                        `${wingStart},${oy - sH * 0.05}`,
+                        `${ox},${oy - sH * 0.15}`
+                      ];
+
+                      return (
+                        <g>
+                          <line x1={ox - 30} y1={oy} x2={ox + sL + 30} y2={oy} stroke="#38bdf8" strokeWidth="1" strokeDasharray="6,4" strokeOpacity="0.4" />
+                          <polygon points={pts.join(' ')} fill="rgba(56, 189, 248, 0.08)" stroke="#38bdf8" strokeWidth="2.5" />
+                          <line x1={wingStart} y1={oy - sH} x2={wingEnd} y2={oy - sH * 0.95} stroke="#10b981" strokeWidth="3.5" />
+                          <DimensionLine x1={ox} y1={oy - sH} x2={ox + sL} y2={oy - sH} offset={-35} orientation="horizontal" measuredValueMm={len} unit={unit} labelPrefix="TOTAL LENGTH: " color="#38bdf8" />
+                          <DimensionLine x1={wingStart} y1={oy} x2={wingStart} y2={oy - sH} offset={-35} orientation="vertical" measuredValueMm={aircraft.fuselage.maxCabinHeightMm} unit={unit} labelPrefix="CABIN HT: " color="#38bdf8" />
+                        </g>
+                      );
+                    })()}
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 6: CONTROL SURFACES */}
+              {activeTab === 6 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="Control Surfaces – Ailerons, Elevator & Rudder Schedules"
+                    subtitle="Amber highlighted movable aerodynamic flight control surfaces"
+                    width={900}
+                    height={480}
+                    downloadFileName="control-surfaces"
+                  >
+                    <g>
+                      {/* Left Aileron */}
+                      <rect x="100" y="80" width="300" height="50" fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+                      <text x="250" y="110" textAnchor="middle" fill="#fbbf24" fontSize="10" fontFamily="monospace" fontWeight="bold">LEFT AILERON</text>
+
+                      {/* Right Aileron */}
+                      <rect x="500" y="80" width="300" height="50" fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+                      <text x="650" y="110" textAnchor="middle" fill="#fbbf24" fontSize="10" fontFamily="monospace" fontWeight="bold">RIGHT AILERON</text>
+
+                      {/* Elevator */}
+                      <rect x="150" y="240" width="600" height="55" fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+                      <text x="450" y="272" textAnchor="middle" fill="#fbbf24" fontSize="10" fontFamily="monospace" fontWeight="bold">DUAL ELEVATOR ASSEMBLY</text>
+
+                      {/* Rudder */}
+                      <polygon points="380,440 400,340 460,340 470,440" fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="2" />
+                      <text x="425" y="400" textAnchor="middle" fill="#fbbf24" fontSize="10" fontFamily="monospace" fontWeight="bold">RUDDER</text>
+                    </g>
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 7: COMPLETE BLUEPRINT */}
+              {activeTab === 7 && (
+                <div className="space-y-4">
+                  <TechnicalViewer
+                    title="COMPLETE AIRCRAFT MANUFACTURING BLUEPRINT – GENERAL ARRANGEMENT"
+                    subtitle={`ADS-RCT-2026-001 | SCALE 1:1 NOTED | UNITS: ${unit.toUpperCase()}`}
+                    width={1800}
+                    height={1200}
+                    downloadFileName="master-blueprint"
+                  >
+                    {(() => {
+                      const b = aircraft.wing.wingspanMm;
+                      const scale = 700 / b;
+                      const cx = 500, cy = 250;
+                      const sSpan = b * scale;
+                      const sHalf = sSpan / 2;
+                      const sChord = aircraft.wing.chordRootMm * scale;
+                      const fuseL = aircraft.fuselage.totalLengthMm * scale;
+
+                      return (
+                        <g>
+                          {/* Border */}
+                          <rect x="30" y="30" width="1740" height="1140" fill="none" stroke="#38bdf8" strokeWidth="3" />
+
+                          {/* 1. Wing Top */}
+                          <text x="60" y="70" fill="#38bdf8" fontSize="14" fontFamily="monospace" fontWeight="bold">VIEW 1: WING PLANFORM</text>
+                          <rect x={cx - sHalf} y={cy - sChord / 2} width={sSpan} height={sChord} fill="rgba(56, 189, 248, 0.05)" stroke="#38bdf8" strokeWidth="2" />
+                          <DimensionLine x1={cx - sHalf} y1={cy - sChord / 2} x2={cx + sHalf} y2={cy - sChord / 2} offset={-30} orientation="horizontal" measuredValueMm={b} unit={unit} labelPrefix="SPAN: " color="#38bdf8" />
+
+                          {/* 2. Fuselage Side */}
+                          <text x="60" y="550" fill="#38bdf8" fontSize="14" fontFamily="monospace" fontWeight="bold">VIEW 2: FUSELAGE ELEVATION</text>
+                          <rect x="120" y="650" width={fuseL} height="90" fill="rgba(56, 189, 248, 0.05)" stroke="#38bdf8" strokeWidth="2" />
+                          <DimensionLine x1="120" y1="650" x2={120 + fuseL} y2="650" offset={-25} orientation="horizontal" measuredValueMm={aircraft.fuselage.totalLengthMm} unit={unit} labelPrefix="LENGTH: " color="#38bdf8" />
+
+                          {/* 3. Horizontal Stabilizer */}
+                          <text x="1100" y="70" fill="#38bdf8" fontSize="14" fontFamily="monospace" fontWeight="bold">VIEW 3: HORIZONTAL STABILIZER</text>
+                          <rect x="1150" y="160" width="450" height="90" fill="rgba(56, 189, 248, 0.05)" stroke="#38bdf8" strokeWidth="2" />
+                          <rect x="1150" y="220" width="450" height="30" fill="url(#controlSurfaceHatch)" stroke="#fbbf24" strokeWidth="1.5" />
+
+                          {/* 4. Vertical Stabilizer */}
+                          <text x="1100" y="450" fill="#38bdf8" fontSize="14" fontFamily="monospace" fontWeight="bold">VIEW 4: VERTICAL STABILIZER</text>
+                          <polygon points="1200,650 1280,480 1380,480 1420,650" fill="rgba(56, 189, 248, 0.05)" stroke="#38bdf8" strokeWidth="2" />
+
+                          {/* Title Block */}
+                          <g transform="translate(1320, 940)">
+                            <rect x="0" y="0" width="420" height="200" fill="#091e3a" stroke="#38bdf8" strokeWidth="2" />
+                            <text x="210" y="35" textAnchor="middle" fill="#38bdf8" fontSize="16" fontFamily="sans-serif" fontWeight="900">AERO DESIGN STUDIO</text>
+                            <text x="210" y="55" textAnchor="middle" fill="#94a3b8" fontSize="10">RC TRAINER AIRCRAFT CAD</text>
+                            <line x1="0" y1="70" x2="420" y2="70" stroke="#38bdf8" strokeWidth="1" />
+                            <text x="20" y="95" fill="#ffffff" fontSize="11" fontFamily="monospace">SPAN: {formatDimension(b, unit)} | AR: {aircraft.wing.aspectRatio.toFixed(1)}</text>
+                            <text x="20" y="120" fill="#ffffff" fontSize="11" fontFamily="monospace">TAIL: Vh={aircraft.horizontalStabilizer.volumeCoefficientActual} | Vv={aircraft.verticalStabilizer.volumeCoefficientActual}</text>
+                            <text x="20" y="145" fill="#ffffff" fontSize="11" fontFamily="monospace">AUW: {aircraft.performance.estimatedWeightGrams} g | STALL: {aircraft.performance.stallSpeedKmh} km/h</text>
+                            <text x="20" y="175" fill="#94a3b8" fontSize="9" fontFamily="monospace">DRAWING: ADS-RCT-2026-001 | REV 1.0</text>
+                          </g>
+                        </g>
+                      );
+                    })()}
+                  </TechnicalViewer>
+                </div>
+              )}
+
+              {/* TAB 8: EXPORT */}
+              {activeTab === 8 && (
+                <div className="max-w-2xl mx-auto space-y-4">
+                  <div className="p-6 bg-slate-900 rounded-2xl border border-slate-800 space-y-4">
+                    <h2 className="text-base font-bold text-white">Export Engineering Blueprint</h2>
+                    <p className="text-xs text-slate-400">Export technical documents in PDF or CSV formats</p>
+                    <div className="grid grid-cols-2 gap-4 pt-2">
+                      <button
+                        onClick={() => {
+                          if (!window.jspdf) return alert('jsPDF loading...');
+                          const { jsPDF } = window.jspdf;
+                          const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+                          doc.setFillColor(11, 25, 44);
+                          doc.rect(0, 0, 297, 210, 'F');
+                          doc.setTextColor(56, 189, 248);
+                          doc.setFontSize(20);
+                          doc.text('AERO DESIGN STUDIO', 20, 25);
+                          doc.setFontSize(11);
+                          doc.setTextColor(255, 255, 255);
+                          doc.text('RC TRAINER AIRCRAFT – SPECIFICATION SHEET', 20, 33);
+                          doc.setFontSize(9);
+                          doc.text(`Wingspan: ${formatDimension(config.wingspanMm, unit)}`, 20, 50);
+                          doc.text(`Wing Area: ${formatArea(aircraft.wing.wingAreaMm2, unit)}`, 20, 58);
+                          doc.text(`Estimated AUW: ${aircraft.performance.estimatedWeightGrams} g`, 20, 66);
+                          doc.text(`Stall Speed: ${aircraft.performance.stallSpeedKmh} km/h`, 20, 74);
+                          doc.save('rc-trainer-blueprint.pdf');
+                        }}
+                        className="py-3 px-4 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow"
+                      >
+                        Download PDF Blueprint
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const rows = [
+                            ['AERO DESIGN STUDIO - RC TRAINER', ''],
+                            ['Wingspan', formatDimension(config.wingspanMm, unit)],
+                            ['Wing Area', formatArea(aircraft.wing.wingAreaMm2, unit)],
+                            ['Fuselage Length', formatDimension(aircraft.fuselage.totalLengthMm, unit)],
+                            ['H-Stab Span', formatDimension(aircraft.horizontalStabilizer.spanMm, unit)],
+                            ['V-Stab Height', formatDimension(aircraft.verticalStabilizer.heightMm, unit)],
+                            ['Target Weight', `${aircraft.performance.estimatedWeightGrams} g`]
+                          ];
+                          const csv = 'data:text/csv;charset=utf-8,' + rows.map(r => r.join(',')).join('\n');
+                          const link = document.createElement('a');
+                          link.href = encodeURI(csv);
+                          link.download = `rc-trainer-dimensions-${unit}.csv`;
+                          link.click();
+                        }}
+                        className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition shadow"
+                      >
+                        Download CSV Schedule
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </main>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
